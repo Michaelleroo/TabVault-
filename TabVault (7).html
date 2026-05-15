@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TabVault</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0f0f0f; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: #181818; }
+  ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+const SAMPLE_SONGS = [
+  {
+    id: 1,
+    title: "Iris",
+    artist: "Goo Goo Dolls",
+    key: "D",
+    capo: "",
+    tags: ["rock", "90s"],
+    content: `[VERSE 1]
+        D             Em              G
+And I'd give up forever to touch you
+      Bm          A            G
+'Cause I know that you feel me somehow
+            D             Em              G
+You're the closest to heaven that I'll ever be
+      Bm          A         G
+And I don't want to go home right now
+
+[VERSE 2]
+        D             Em              G
+And all I can taste is this moment
+      Bm          A            G
+And all I can breathe is your life
+            D             Em              G
+And sooner or later it's over
+      Bm          A         G
+I just don't want to miss you tonight
+
+[CHORUS]
+            G                  D
+And I don't want the world to see me
+            Em                 C
+'Cause I don't think that they'd understand
+               G                  D
+When everything's made to be broken
+         Em              C
+I just want you to know who I am`,
+  },
+];
+
+function formatDate(d) {
+  return d.toISOString().split("T")[0];
+}
+
+function getStreak(history) {
+  if (!history.length) return 0;
+  const today = formatDate(new Date());
+  const sorted = [...new Set(history)].sort().reverse();
+  if (sorted[0] !== today) {
+    const yesterday = formatDate(new Date(Date.now() - 86400000));
+    if (sorted[0] !== yesterday) return 0;
+  }
+  let streak = 1;
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = new Date(sorted[i - 1]);
+    const curr = new Date(sorted[i]);
+    const diff = (prev - curr) / 86400000;
+    if (Math.round(diff) === 1) streak++;
+    else break;
+  }
+  return streak;
+}
+
+function getLongestStreak(history) {
+  if (!history.length) return 0;
+  const sorted = [...new Set(history)].sort();
+  let longest = 1, current = 1;
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = new Date(sorted[i - 1]);
+    const curr = new Date(sorted[i]);
+    const diff = Math.round((curr - prev) / 86400000);
+    if (diff === 1) { current++; longest = Math.max(longest, current); }
+    else current = 1;
+  }
+  return longest;
+}
+
+function fmtDuration(ms) {
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+const CHORD_TOKEN = /^[A-G][b#]?(m|maj|min|aug|dim|sus|add|M)?\d*(\/[A-G][b#]?)?$/;
+function isChordLine(line) {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  const tokens = trimmed.split(/\s+/);
+  return tokens.length >= 1 && tokens.every((t) => CHORD_TOKEN.test(t));
+}
+
+function ColoredSheet({ content, sheetStyle, chord, lyric, section }) {
+  const lines = content.split("\n");
+  return (
+    <pre style={sheetStyle}>
+      {lines.map((line, i) => {
+        const trimmed = line.trim();
+        let color = lyric;
+        if (trimmed.startsWith("[") && trimmed.endsWith("]")) color = section;
+        else if (isChordLine(line)) color = chord;
+        return (
+          <span key={i} style={{ color, display: "block" }}>
+            {line || "\u00A0"}
+          </span>
+        );
+      })}
+    </pre>
+  );
+}
+
+const DARK = {
+  bg: "#0f0f0f", surface: "#181818", card: "#1c1c1c", border: "#2a2a2a",
+  orange: "#e8a020", orangeDim: "#c48518", text: "#e8e8e8", muted: "#777",
+  danger: "#c04040", chord: "#e8a020", lyric: "#e8e8e8", section: "#e8a020",
+  sheetBg: "#181818", statCardBg: "#161616", statCardBorder: "#222",
+  chartBg: "#111", chartBorder: "#1e1e1e", barTrackBg: "#252525",
+  topBannerBg: "#141008", topBannerBorder: "#2a2010", favBannerBg: "#1e1500",
+  modalBg: "#1c1c1c", modalFeatureBg: "#252525", settingsPanelBg: "#1a1a1a",
+  streakBadgeBg: "#2a1a00",
+};
+
+const LIGHT = {
+  bg: "#f5efe6", surface: "#ede4d8", card: "#e8ddd0", border: "#c8b89a",
+  orange: "#b05c10", orangeDim: "#8a4510", text: "#000000", muted: "#3a2e24",
+  danger: "#a03020", chord: "#000000", lyric: "#000000", section: "#000000",
+  sheetBg: "#ede4d8", statCardBg: "#ede4d8", statCardBorder: "#c8b89a",
+  chartBg: "#e8ddd0", chartBorder: "#c8b89a", barTrackBg: "#d8cbb8",
+  topBannerBg: "#e8ddd0", topBannerBorder: "#c8b89a", favBannerBg: "#e8ddd0",
+  modalBg: "#ede4d8", modalFeatureBg: "#e0d5c5", settingsPanelBg: "#ede4d8",
+  streakBadgeBg: "#ddd0bc",
+};
+
+const FONT = "Palatino Linotype, Palatino, Book Antiqua, serif";
+const MONO = "'Courier New', Courier, monospace";
+
+function makeStyles(C) { return {
+  root: { minHeight: "100vh", background: C.bg, color: C.text, fontFamily: FONT },
+  nav: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px", height: 56, borderBottom: `1px solid ${C.border}`, background: C.bg, position: "sticky", top: 0, zIndex: 10 },
+  logo: { fontSize: 18, display: "flex", alignItems: "center", gap: 6 },
+  logoText: { color: C.orange, fontWeight: 700, letterSpacing: 1 },
+  navRight: { display: "flex", alignItems: "center", gap: 10 },
+  streakBadge: { display: "flex", alignItems: "center", gap: 5, background: C.streakBadgeBg, border: `1px solid ${C.orangeDim}`, borderRadius: 20, padding: "4px 12px", fontSize: 13 },
+  streakNum: { color: C.orange, fontWeight: 700, fontSize: 15 },
+  streakLabel: { color: C.muted, fontSize: 11 },
+  navBtn: { background: "transparent", border: `1px solid ${C.border}`, color: C.text, borderRadius: 6, padding: "6px 16px", cursor: "pointer", fontSize: 13, fontFamily: FONT },
+  navBtnActive: { background: "transparent", border: `1px solid ${C.orange}`, color: C.orange, borderRadius: 6, padding: "6px 16px", cursor: "pointer", fontSize: 13, fontFamily: FONT },
+  navBtnAdd: { background: "transparent", border: `1px solid ${C.border}`, color: C.text, borderRadius: 6, padding: "6px 16px", cursor: "pointer", fontSize: 13, fontFamily: FONT },
+  page: { maxWidth: 960, margin: "0 auto", padding: "28px 24px" },
+  search: { width: "100%", boxSizing: "border-box", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, padding: "13px 16px", fontSize: 14, outline: "none", marginBottom: 24, fontFamily: FONT },
+  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 14 },
+  card: { background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "18px 16px", cursor: "pointer" },
+  cardTitle: { fontWeight: 700, fontSize: 16, marginBottom: 4, color: C.text },
+  cardArtist: { fontSize: 13, color: C.muted, marginBottom: 10 },
+  cardMeta: { display: "flex", flexWrap: "wrap", gap: 5 },
+  tag: { background: "#222", border: `1px solid ${C.border}`, borderRadius: 4, padding: "2px 7px", fontSize: 11, color: C.muted },
+  empty: { color: C.muted, marginTop: 40, textAlign: "center" },
+  backRow: { display: "flex", justifyContent: "space-between", marginBottom: 16 },
+  backBtn: { background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14, padding: 0, fontFamily: FONT },
+  deleteBtn: { background: "none", border: `1px solid ${C.danger}`, color: C.danger, borderRadius: 6, padding: "4px 12px", cursor: "pointer", fontSize: 12, fontFamily: FONT },
+  songTitle: { fontSize: 32, fontWeight: 700, margin: "0 0 4px", color: C.text },
+  songArtist: { fontSize: 16, color: C.muted, margin: "0 0 4px" },
+  songKey: { fontSize: 13, color: C.orange, margin: "0 0 4px" },
+  songCapo: { fontSize: 13, color: C.muted, margin: "0 0 12px", fontStyle: "italic" },
+  divider: { border: "none", borderTop: `1px solid ${C.border}`, margin: "16px 0" },
+  controlsRow: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 24, marginBottom: 20 },
+  scrollBtnPlay: { background: "transparent", border: `1px solid ${C.orange}`, color: C.orange, borderRadius: 6, padding: "8px 18px", cursor: "pointer", fontSize: 14, fontFamily: FONT },
+  scrollBtnStop: { background: C.orange, border: `1px solid ${C.orange}`, color: "#000", borderRadius: 6, padding: "8px 18px", cursor: "pointer", fontSize: 14, fontWeight: 700, fontFamily: FONT },
+  speedGroup: { display: "flex", alignItems: "center", gap: 10 },
+  controlLabel: { fontSize: 13, color: C.muted },
+  stepBtn: { background: C.surface, border: `1px solid ${C.border}`, color: C.text, borderRadius: 6, width: 34, height: 34, cursor: "pointer", fontSize: 20, lineHeight: "1", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: FONT, padding: 0 },
+  speedDisplay: { minWidth: 30, textAlign: "center", fontSize: 15, color: C.orange, fontWeight: 700 },
+  sheetWrapper: { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "24px", maxHeight: "60vh", overflowY: "auto", overflowX: "auto" },
+  sheet: { margin: 0, fontFamily: MONO, fontSize: 14, lineHeight: 1.8, whiteSpace: "pre", tabSize: 4 },
+  addTitle: { fontSize: 24, fontWeight: 700, marginBottom: 24, color: C.text },
+  formGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 4 },
+  formGroup: { marginBottom: 16 },
+  label: { display: "block", fontSize: 12, color: C.muted, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 },
+  hint: { fontSize: 12, color: C.muted, marginBottom: 8 },
+  input: { width: "100%", boxSizing: "border-box", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, padding: "10px 12px", fontSize: 14, outline: "none", fontFamily: FONT },
+  textarea: { width: "100%", boxSizing: "border-box", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, padding: "12px", fontSize: 13, outline: "none", fontFamily: MONO, lineHeight: 1.7, resize: "vertical", whiteSpace: "pre" },
+  previewBox: { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 16, marginBottom: 20, overflowX: "auto" },
+  previewLabel: { fontSize: 11, color: C.orange, textTransform: "uppercase", marginBottom: 10, fontFamily: FONT },
+  formActions: { display: "flex", justifyContent: "flex-end", gap: 12 },
+  cancelBtn: { background: "transparent", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 6, padding: "10px 24px", cursor: "pointer", fontSize: 14, fontFamily: FONT },
+  saveBtn: { background: C.orange, border: "none", color: "#000", borderRadius: 6, padding: "10px 28px", cursor: "pointer", fontSize: 14, fontWeight: 700, fontFamily: FONT },
+  navBtnPlus: { background: "transparent", border: `1px solid ${C.border}`, color: C.text, borderRadius: 6, padding: "6px 16px", cursor: "pointer", fontSize: 13, fontFamily: FONT },
+  offlineBtn: { background: "transparent", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 6, padding: "4px 12px", cursor: "pointer", fontSize: 12, fontFamily: FONT },
+  songCountRow: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 },
+  songCountText: { fontSize: 12, color: C.muted },
+  upgradePill: { background: "transparent", border: `1px solid #c48518`, color: C.orange, borderRadius: 20, padding: "3px 12px", fontSize: 12, cursor: "pointer", fontFamily: FONT },
+  modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" },
+  modalBox: { background: C.modalBg, border: `1px solid ${C.border}`, borderRadius: 14, padding: "36px 32px", maxWidth: 360, width: "90%", textAlign: "center" },
+  modalIcon: { fontSize: 36, marginBottom: 12 },
+  modalTitle: { fontSize: 22, fontWeight: 700, color: C.orange, margin: "0 0 10px", fontFamily: FONT },
+  modalBody: { fontSize: 14, color: C.muted, margin: "0 0 20px", lineHeight: 1.6 },
+  modalFeatures: { textAlign: "left", marginBottom: 24, display: "flex", flexDirection: "column", gap: 10 },
+  modalFeature: { fontSize: 14, color: C.text, background: C.modalFeatureBg, borderRadius: 8, padding: "10px 14px" },
+  modalBtn: { width: "100%", background: C.orange, border: "none", color: "#000", borderRadius: 8, padding: "12px", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: FONT, marginBottom: 10 },
+  modalDismiss: { background: "none", border: "none", color: C.muted, fontSize: 13, cursor: "pointer", fontFamily: FONT },
+  statCard: { background: C.statCardBg, border: `1px solid ${C.statCardBorder}`, borderRadius: 10, padding: "28px 22px", display: "flex", flexDirection: "column", gap: 6 },
+  statAbbr: { fontSize: 10, fontWeight: 700, color: C.orange, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 10 },
+  statValue: { fontSize: 28, fontWeight: 400, color: C.text, letterSpacing: -0.5 },
+  statLabel: { fontSize: 12, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5 },
+  statSub: { fontSize: 12, color: C.orange, marginTop: 2 },
+  statsGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(175px, 1fr))", gap: 12, marginBottom: 40 },
+  statsTitle: { fontSize: 24, fontWeight: 400, margin: "0 0 6px", color: C.text, letterSpacing: 0.3 },
+  statsSub: { fontSize: 13, color: C.muted, margin: "0 0 32px", fontStyle: "italic" },
+  chartSection: { background: C.chartBg, border: `1px solid ${C.chartBorder}`, borderRadius: 10, padding: "28px 28px 18px", marginBottom: 32 },
+  chartTitle: { fontSize: 13, color: C.muted, textTransform: "uppercase", letterSpacing: 0.5, margin: "0 0 18px", fontWeight: 400 },
+  barChart: { display: "flex", alignItems: "flex-end", gap: 10, height: 120 },
+  barCol: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, height: "100%" },
+  barTrack: { flex: 1, width: "100%", background: C.barTrackBg, borderRadius: 4, display: "flex", flexDirection: "column", justifyContent: "flex-end", overflow: "hidden" },
+  barFill: { width: "100%", background: C.orange, borderRadius: "4px 4px 0 0", minHeight: 0 },
+  barLabel: { fontSize: 11, color: C.muted, whiteSpace: "nowrap" },
+  barTime: { fontSize: 10, color: C.orange, whiteSpace: "nowrap" },
+  topSongBanner: { display: "flex", alignItems: "center", justifyContent: "space-between", background: C.topBannerBg, border: `1px solid ${C.topBannerBorder}`, borderRadius: 10, padding: "22px 26px", cursor: "pointer" },
+  topSongLabel: { fontSize: 11, color: C.orange, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 },
+  topSongTitle: { fontSize: 18, fontWeight: 700, color: C.text, marginBottom: 2 },
+  topSongArtist: { fontSize: 13, color: C.muted },
+  topSongCount: { display: "flex", flexDirection: "column", alignItems: "center" },
+  topSongNum: { fontSize: 36, fontWeight: 700, color: C.orange, lineHeight: 1 },
+  topSongUnit: { fontSize: 12, color: C.muted },
+  favBtn: { background: "transparent", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 6, padding: "4px 12px", cursor: "pointer", fontSize: 13, fontFamily: FONT },
+  favBtnActive: { background: C.streakBadgeBg, border: `1px solid ${C.orange}`, color: C.orange, borderRadius: 6, padding: "4px 12px", cursor: "pointer", fontSize: 13, fontFamily: FONT, fontWeight: 700 },
+  favBanner: { display: "flex", alignItems: "center", gap: 14, background: C.favBannerBg, border: `1px solid ${C.orangeDim}`, borderRadius: 10, padding: "14px 18px", marginBottom: 22, cursor: "pointer" },
+  favBannerHeart: { fontSize: 26, color: C.orange, lineHeight: 1 },
+  favBannerTitle: { fontWeight: 700, fontSize: 15, color: C.text, marginBottom: 2 },
+  favBannerSub: { fontSize: 12, color: C.muted },
+  settingsBtn: { background: "transparent", border: `1px solid ${C.border}`, color: C.text, borderRadius: 6, width: 34, height: 34, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 },
+  settingsOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 200, display: "flex", justifyContent: "flex-end", alignItems: "stretch" },
+  settingsPanel: { background: C.settingsPanelBg, borderLeft: `1px solid ${C.border}`, width: 280, padding: "28px 24px", display: "flex", flexDirection: "column", gap: 0, overflowY: "auto" },
+  settingsPanelHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 },
+  settingsPanelTitle: { fontSize: 16, fontWeight: 600, color: C.text, fontFamily: FONT },
+  settingsCloseBtn: { background: "none", border: "none", color: C.muted, fontSize: 16, cursor: "pointer", padding: 4 },
+  settingsLabel: { fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 12, marginTop: 8 },
+  themeToggleRow: { display: "flex", gap: 10 },
+  themeOpt: { flex: 1, display: "flex", alignItems: "center", gap: 8, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px", cursor: "pointer", fontSize: 13, color: C.muted, fontFamily: FONT },
+  themeOptActive: { flex: 1, display: "flex", alignItems: "center", gap: 8, background: C.surface, border: `1px solid ${C.orange}`, borderRadius: 8, padding: "10px 12px", cursor: "pointer", fontSize: 13, color: C.orange, fontFamily: FONT, fontWeight: 600 },
+  themeOptSwatch: (t) => ({ width: 14, height: 14, borderRadius: 3, flexShrink: 0, background: t === 'dark' ? '#0f0f0f' : '#f5efe6', border: t === 'dark' ? '1px solid #444' : '1px solid #c8b89a' }),
+}; }
+
+function TabVault() {
+  const [songs, setSongs] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("tv_songs")) || SAMPLE_SONGS; } catch { return SAMPLE_SONGS; }
+  });
+  const [loginHistory, setLoginHistory] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("tv_history")) || [formatDate(new Date())]; } catch { return [formatDate(new Date())]; }
+  });
+  const [favouriteId, setFavouriteId] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("tv_favourite")) || null; } catch { return null; }
+  });
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem("tv_theme") || "dark"; } catch { return "dark"; }
+  });
+  const [showSettings, setShowSettings] = useState(false);
+  const [view, setView] = useState("library");
+  const [showUpsell, setShowUpsell] = useState(false);
+  const [selectedId, setSelectedId] = useState(null);
+  const [search, setSearch] = useState("");
+  const [form, setForm] = useState({ title: "", artist: "", key: "", capo: "", tags: "", content: "" });
+  const [playCounts, setPlayCounts] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("tv_plays")) || {}; } catch { return {}; }
+  });
+  const [sessions, setSessions] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("tv_sessions")) || []; } catch { return []; }
+  });
+  const [scrolling, setScrolling] = useState(false);
+  const [speed, setSpeed] = useState(3);
+  const [buffer, setBuffer] = useState(3);
+
+  const contentRef = useRef(null);
+  const intervalRef = useRef(null);
+  const timeoutRef = useRef(null);
+  const speedRef = useRef(speed);
+  const scrollingRef = useRef(false);
+  const accumRef = useRef(0);
+  const sessionStartRef = useRef(Date.now());
+
+  useEffect(() => { speedRef.current = speed; }, [speed]);
+
+  const streak = getStreak(loginHistory);
+  const selectedSong = songs.find((s) => s.id === selectedId);
+
+  useEffect(() => { localStorage.setItem("tv_songs", JSON.stringify(songs)); }, [songs]);
+  useEffect(() => { localStorage.setItem("tv_favourite", JSON.stringify(favouriteId)); }, [favouriteId]);
+  useEffect(() => { localStorage.setItem("tv_plays", JSON.stringify(playCounts)); }, [playCounts]);
+  useEffect(() => { localStorage.setItem("tv_theme", theme); }, [theme]);
+  useEffect(() => { localStorage.setItem("tv_sessions", JSON.stringify(sessions)); }, [sessions]);
+
+  useEffect(() => {
+    const handleUnload = () => {
+      const duration = Date.now() - sessionStartRef.current;
+      if (duration < 5000) return;
+      const date = formatDate(new Date());
+      const prev = JSON.parse(localStorage.getItem("tv_sessions") || "[]");
+      localStorage.setItem("tv_sessions", JSON.stringify([...prev, { date, duration }]));
+    };
+    window.addEventListener("beforeunload", handleUnload);
+    return () => window.removeEventListener("beforeunload", handleUnload);
+  }, []);
+
+  useEffect(() => {
+    const today = formatDate(new Date());
+    if (!loginHistory.includes(today)) {
+      const updated = [...loginHistory, today];
+      setLoginHistory(updated);
+      localStorage.setItem("tv_history", JSON.stringify(updated));
+    }
+  }, []);
+
+  useEffect(() => () => { clearInterval(intervalRef.current); clearTimeout(timeoutRef.current); }, []);
+
+  function stopScroll() {
+    scrollingRef.current = false;
+    clearInterval(intervalRef.current);
+    clearTimeout(timeoutRef.current);
+    intervalRef.current = null;
+    timeoutRef.current = null;
+    setScrolling(false);
+  }
+
+  function startScroll() {
+    if (scrollingRef.current) return;
+    scrollingRef.current = true;
+    accumRef.current = 0;
+    setScrolling(true);
+    const delay = buffer * 1000;
+    timeoutRef.current = setTimeout(() => {
+      if (!scrollingRef.current) return;
+      intervalRef.current = setInterval(() => {
+        if (!scrollingRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; return; }
+        const el = contentRef.current;
+        if (!el) return;
+        accumRef.current += speedRef.current * 0.12;
+        if (accumRef.current >= 1) {
+          const px = Math.floor(accumRef.current);
+          el.scrollTop += px;
+          accumRef.current -= px;
+        }
+        if (el.scrollTop + el.clientHeight >= el.scrollHeight - 2) {
+          clearInterval(intervalRef.current); intervalRef.current = null;
+          scrollingRef.current = false; setScrolling(false);
+        }
+      }, 50);
+    }, delay);
+  }
+
+  function handleNavChange(dest) { stopScroll(); setView(dest); }
+
+  const filtered = songs.filter((s) =>
+    [s.title, s.artist, s.key, ...(s.tags || [])].join(" ").toLowerCase().includes(search.toLowerCase())
+  );
+
+  function addSong() {
+    if (!form.title.trim()) return;
+    const newSong = {
+      id: Date.now(),
+      title: form.title.trim(), artist: form.artist.trim(), key: form.key.trim(),
+      capo: form.capo.trim(), tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
+      content: form.content,
+    };
+    setSongs((prev) => [...prev, newSong]);
+    setForm({ title: "", artist: "", key: "", capo: "", tags: "", content: "" });
+    setView("library");
+  }
+
+  function deleteSong(id) { setSongs((prev) => prev.filter((s) => s.id !== id)); stopScroll(); setView("library"); }
+  function toggleFavourite(id) { setFavouriteId((prev) => (prev === id ? null : id)); }
+
+  const isLight = theme === "light";
+  const T = isLight ? LIGHT : DARK;
+  const St = makeStyles(T);
+
+  return (
+    <div style={St.root}>
+      {showUpsell && (
+        <div style={St.modalOverlay} onClick={() => setShowUpsell(false)}>
+          <div style={St.modalBox} onClick={(e) => e.stopPropagation()}>
+            <div style={St.modalIcon}>+</div>
+            <h2 style={St.modalTitle}>TabVault Plus</h2>
+            <p style={St.modalBody}>Upgrade to TabVault Plus to access this feature.</p>
+            <div style={St.modalFeatures}>
+              <div style={St.modalFeature}>Create &amp; manage setlists</div>
+              <div style={St.modalFeature}>Unlimited song storage</div>
+              <div style={St.modalFeature}>Offline access to all your tabs</div>
+            </div>
+            <button style={St.modalBtn} onClick={() => setShowUpsell(false)}>Coming Soon</button>
+            <button style={St.modalDismiss} onClick={() => setShowUpsell(false)}>Maybe later</button>
+          </div>
+        </div>
+      )}
+
+      <nav style={St.nav}>
+        <span style={St.logo}>🎸 <span style={St.logoText}>TabVault</span></span>
+        <div style={St.navRight}>
+          <div style={St.streakBadge}>
+            <span style={St.streakNum}>{streak}</span>
+            <span style={St.streakLabel}>day streak</span>
+          </div>
+          <button style={view === "library" ? St.navBtnActive : St.navBtn} onClick={() => handleNavChange("library")}>Library</button>
+          <button style={view === "stats" ? St.navBtnActive : St.navBtn} onClick={() => handleNavChange("stats")}>Practice Stats</button>
+          <button style={St.navBtnPlus} onClick={() => setShowUpsell(true)}>Setlists</button>
+          <button style={St.navBtnAdd} onClick={() => handleNavChange("add")}>+ Add Tab</button>
+          <button style={St.settingsBtn} onClick={() => setShowSettings(true)} title="Settings">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </button>
+        </div>
+      </nav>
+
+      {showSettings && (
+        <div style={St.settingsOverlay} onClick={() => setShowSettings(false)}>
+          <div style={St.settingsPanel} onClick={(e) => e.stopPropagation()}>
+            <div style={St.settingsPanelHeader}>
+              <span style={St.settingsPanelTitle}>Settings</span>
+              <button style={St.settingsCloseBtn} onClick={() => setShowSettings(false)}>✕</button>
+            </div>
+            <hr style={St.divider} />
+            <p style={St.settingsLabel}>Appearance</p>
+            <div style={St.themeToggleRow}>
+              <button style={theme === "dark" ? St.themeOptActive : St.themeOpt} onClick={() => setTheme("dark")}>
+                <span style={St.themeOptSwatch("dark")} />Dark
+              </button>
+              <button style={theme === "light" ? St.themeOptActive : St.themeOpt} onClick={() => setTheme("light")}>
+                <span style={St.themeOptSwatch("light")} />Light
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {view === "library" && (
+        <div style={St.page}>
+          <input style={St.search} placeholder="Search songs, artists, keys, tags…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          {(() => {
+            const fav = songs.find((s) => s.id === favouriteId);
+            if (!fav) return null;
+            return (
+              <div style={St.favBanner} onClick={() => { setSelectedId(fav.id); setView("song"); }}>
+                <span style={St.favBannerHeart}>♥</span>
+                <div>
+                  <div style={St.favBannerTitle}>{fav.title}</div>
+                  <div style={St.favBannerSub}>{fav.artist} — Your favourite</div>
+                </div>
+              </div>
+            );
+          })()}
+          <div style={St.songCountRow}>
+            <span style={St.songCountText}>{songs.length} / 15 songs</span>
+            <button style={St.upgradePill} onClick={() => setShowUpsell(true)}>Unlimited with Plus</button>
+          </div>
+          {filtered.length === 0 && <p style={St.empty}>No songs found. Add your first tab!</p>}
+          <div style={St.grid}>
+            {filtered.map((s) => (
+              <div key={s.id} style={St.card} onClick={() => {
+                setSelectedId(s.id); setView("song");
+                setPlayCounts((prev) => ({ ...prev, [s.id]: (prev[s.id] || 0) + 1 }));
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
+                  <div style={St.cardTitle}>{s.title}</div>
+                  {favouriteId === s.id && <span style={{ color: "#e8a020", fontSize: 16 }}>♥</span>}
+                </div>
+                <div style={St.cardArtist}>{s.artist}</div>
+                <div style={St.cardMeta}>
+                  {s.key && <span style={St.tag}>Key: {s.key}</span>}
+                  {s.capo && <span style={St.tag}>Capo: {s.capo}</span>}
+                  {(s.tags || []).map((t) => <span key={t} style={St.tag}>{t}</span>)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {view === "song" && selectedSong && (
+        <div style={St.page}>
+          <div style={St.backRow}>
+            <button style={St.backBtn} onClick={() => handleNavChange("library")}>← Library</button>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <button style={favouriteId === selectedSong.id ? St.favBtnActive : St.favBtn} onClick={() => toggleFavourite(selectedSong.id)}>
+                {favouriteId === selectedSong.id ? "♥ Favourite" : "♡ Favourite"}
+              </button>
+              <button style={St.offlineBtn} onClick={() => setShowUpsell(true)}>Save Offline</button>
+              <button style={St.deleteBtn} onClick={() => deleteSong(selectedSong.id)}>Delete</button>
+            </div>
+          </div>
+          <h1 style={St.songTitle}>{selectedSong.title}</h1>
+          <p style={St.songArtist}>{selectedSong.artist}</p>
+          {selectedSong.key && <p style={St.songKey}>Key of {selectedSong.key}</p>}
+          {selectedSong.capo && <p style={St.songCapo}>Capo {selectedSong.capo}</p>}
+          <hr style={St.divider} />
+          <div style={St.controlsRow}>
+            <button style={scrolling ? St.scrollBtnStop : St.scrollBtnPlay} onClick={scrolling ? stopScroll : startScroll}>
+              {scrolling ? "⏹ Stop" : "▶ Auto-Scroll"}
+            </button>
+            <div style={St.speedGroup}>
+              <span style={St.controlLabel}>Speed</span>
+              <button style={St.stepBtn} onClick={() => setSpeed((v) => Math.max(1, v - 1))} disabled={speed <= 1}>−</button>
+              <span style={St.speedDisplay}>{speed}</span>
+              <button style={St.stepBtn} onClick={() => setSpeed((v) => Math.min(10, v + 1))} disabled={speed >= 10}>+</button>
+            </div>
+            <div style={St.speedGroup}>
+              <span style={St.controlLabel}>Delay</span>
+              <button style={St.stepBtn} onClick={() => setBuffer((v) => Math.max(0, v - 1))} disabled={buffer <= 0}>−</button>
+              <span style={St.speedDisplay}>{buffer}s</span>
+              <button style={St.stepBtn} onClick={() => setBuffer((v) => Math.min(15, v + 1))} disabled={buffer >= 15}>+</button>
+            </div>
+          </div>
+          <div ref={contentRef} style={St.sheetWrapper}>
+            <ColoredSheet content={selectedSong.content} sheetStyle={St.sheet} chord={T.chord} lyric={T.lyric} section={T.section} />
+          </div>
+        </div>
+      )}
+
+      {view === "stats" && (() => {
+        const longestStreak = getLongestStreak(loginHistory);
+        const totalDays = [...new Set(loginHistory)].length;
+        let mostPlayedSong = null, mostPlayedCount = 0;
+        songs.forEach((s) => { const c = playCounts[s.id] || 0; if (c > mostPlayedCount) { mostPlayedCount = c; mostPlayedSong = s; } });
+        const longestSession = sessions.reduce((max, s) => s.duration > max ? s.duration : max, 0);
+        const totalTime = sessions.reduce((sum, s) => sum + s.duration, 0);
+        const avgSession = sessions.length ? Math.floor(totalTime / sessions.length) : 0;
+        const last7 = Array.from({ length: 7 }, (_, i) => { const d = new Date(); d.setDate(d.getDate() - (6 - i)); return formatDate(d); });
+        const sessionsByDay = last7.map((date) => ({ date, ms: sessions.filter((s) => s.date === date).reduce((sum, s) => sum + s.duration, 0) }));
+        const maxMs = Math.max(...sessionsByDay.map((d) => d.ms), 1);
+        const sc = (abbr, label, value, sub) => (
+          <div style={St.statCard}>
+            <div style={St.statAbbr}>{abbr}</div>
+            <div style={St.statValue}>{value}</div>
+            <div style={St.statLabel}>{label}</div>
+            {sub && <div style={St.statSub}>{sub}</div>}
+          </div>
+        );
+        return (
+          <div style={St.page}>
+            <h2 style={St.statsTitle}>Practice Stats</h2>
+            <p style={St.statsSub}>A quiet record of your time with the guitar.</p>
+            <div style={St.statsGrid}>
+              {sc('streak', 'Current Streak', `${streak} day${streak !== 1 ? 's' : ''}`, streak === longestStreak && streak > 0 ? 'Personal best!' : null)}
+              {sc('best', 'Longest Streak', `${longestStreak} day${longestStreak !== 1 ? 's' : ''}`, 'All time')}
+              {sc('days', 'Total Days Active', `${totalDays}`, 'Days opened')}
+              {sc('top', 'Most Played Song', mostPlayedSong ? mostPlayedSong.title : '—', mostPlayedSong ? `${mostPlayedCount} opens` : 'No plays yet')}
+              {sc('long', 'Longest Session', longestSession ? fmtDuration(longestSession) : '—', 'Single sitting')}
+              {sc('time', 'Total Time', totalTime ? fmtDuration(totalTime) : '—', sessions.length ? `Avg ${fmtDuration(avgSession)} / session` : 'No sessions yet')}
+              {sc('lib', 'Songs in Library', `${songs.length}`, `${Object.keys(playCounts).length} played at least once`)}
+            </div>
+            <div style={St.chartSection}>
+              <h3 style={St.chartTitle}>Activity — last 7 days</h3>
+              <div style={St.barChart}>
+                {sessionsByDay.map(({ date, ms }) => {
+                  const pct = ms / maxMs;
+                  const dayLabel = new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' });
+                  return (
+                    <div key={date} style={St.barCol}>
+                      <div style={St.barTrack}>
+                        <div style={{ ...St.barFill, height: `${Math.max(pct * 100, ms > 0 ? 4 : 0)}%` }} />
+                      </div>
+                      <div style={St.barLabel}>{dayLabel}</div>
+                      {ms > 0 && <div style={St.barTime}>{fmtDuration(ms)}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            {mostPlayedSong && (
+              <div style={St.topSongBanner} onClick={() => { setSelectedId(mostPlayedSong.id); setView('song'); setPlayCounts((prev) => ({ ...prev, [mostPlayedSong.id]: (prev[mostPlayedSong.id] || 0) + 1 })); }}>
+                <div>
+                  <div style={St.topSongLabel}>Most played</div>
+                  <div style={St.topSongTitle}>{mostPlayedSong.title}</div>
+                  <div style={St.topSongArtist}>{mostPlayedSong.artist}</div>
+                </div>
+                <div style={St.topSongCount}>
+                  <span style={St.topSongNum}>{mostPlayedCount}</span>
+                  <span style={St.topSongUnit}>plays</span>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {view === "add" && (
+        <div style={St.page}>
+          <h2 style={St.addTitle}>Add New Tab</h2>
+          <div style={St.formGrid}>
+            <div style={St.formGroup}>
+              <label style={St.label}>Song Title *</label>
+              <input style={St.input} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Wonderwall" />
+            </div>
+            <div style={St.formGroup}>
+              <label style={St.label}>Artist</label>
+              <input style={St.input} value={form.artist} onChange={(e) => setForm({ ...form, artist: e.target.value })} placeholder="e.g. Oasis" />
+            </div>
+            <div style={St.formGroup}>
+              <label style={St.label}>Key</label>
+              <input style={St.input} value={form.key} onChange={(e) => setForm({ ...form, key: e.target.value })} placeholder="e.g. Am" />
+            </div>
+            <div style={St.formGroup}>
+              <label style={St.label}>Capo</label>
+              <input style={St.input} value={form.capo} onChange={(e) => setForm({ ...form, capo: e.target.value })} placeholder="2nd" />
+            </div>
+            <div style={{ ...St.formGroup, gridColumn: "1 / -1" }}>
+              <label style={St.label}>Tags (comma separated)</label>
+              <input style={St.input} value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} placeholder="e.g. rock, 90s, acoustic" />
+            </div>
+          </div>
+          <div style={St.formGroup}>
+            <label style={St.label}>Paste chords here</label>
+            <p style={St.hint}>Paste your tab exactly as-is — spacing between chords and lyrics will be preserved.</p>
+            <textarea style={St.textarea} value={form.content} onChange={(e) => setForm({ ...form, content: e.target.value })} rows={18} spellCheck={false} />
+          </div>
+          {form.content && (
+            <div style={St.previewBox}>
+              <p style={St.previewLabel}>Preview</p>
+              <ColoredSheet content={form.content} sheetStyle={St.sheet} chord={T.chord} lyric={T.lyric} section={T.section} />
+            </div>
+          )}
+          <div style={St.formActions}>
+            <button style={St.cancelBtn} onClick={() => setView("library")}>Cancel</button>
+            <button style={St.saveBtn} onClick={addSong} disabled={!form.title.trim()}>Save Tab</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.render(<TabVault />, document.getElementById('root'));
+</script>
+</body>
+</html>

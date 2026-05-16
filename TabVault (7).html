@@ -424,6 +424,7 @@ function TabVault() {
       content: form.content,
     }]).select().single();
     if (error) { setSavingError("Could not save song. Please try again."); return; }
+   trackEvent('song_added', form.title.trim());
     setSongs((prev) => [...prev, data]);
     setForm({ title: "", artist: "", key: "", capo: "", tags: "", content: "" });
     setView("library");
